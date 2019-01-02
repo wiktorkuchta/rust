@@ -1,4 +1,3 @@
-#![feature(rustc_private)]
 #![feature(link_args)]
 
 // Set the stack size at link time on Windows. See rustc_driver::in_rustc_thread
@@ -11,17 +10,32 @@
 // Also, don't forget to set this for rustdoc.
 extern {}
 
-extern crate rustc_driver;
-
-// Note that the linkage here should be all that we need, on Linux we're not
-// prefixing the symbols here so this should naturally override our default
-// allocator. On OSX it should override via the zone allocator. We shouldn't
-// enable this by default on other platforms, so other platforms aren't handled
-// here yet.
-#[cfg(feature = "jemalloc-sys")]
-extern crate jemalloc_sys;
-
 fn main() {
+    // Pull in jemalloc when enabled.
+    //
+    // Note that we're pulling in a static copy of jemalloc which means that to
+    // pull it in we need to actually reference its symbols for it to get
+    // linked. The two crates we link to here, std and rustc_driver, are both
+    // dynamic libraries. That means to pull in jemalloc we need to actually
+    // reference allocation symbols one way or another (as this file is the only
+    // object code in the rustc executable).
+    //
+    // As such, here's an interprative dance to slip under LLVM's radar yet
+    // please the linker.
+    #[cfg(feature = "jemalloc-sys")] {
+        if std::env::var("__RUSTC_NEVER_PRESENT_ENV_VAR").is_ok() {
+            unsafe {
+                jemalloc_sys::calloc(1, 4);
+                jemalloc_sys::posix_memalign(&mut std::ptr::null_mut(), 1, 10);
+                jemalloc_sys::aligned_alloc(1, 10);
+                let a = jemalloc_sys::malloc(3);
+                let b = jemalloc_sys::realloc(a, 100);
+                println!("{:?}", b);
+                jemalloc_sys::free(b);
+            }
+        }
+    }
+
     rustc_driver::set_sigpipe_handler();
     rustc_driver::main()
 }
